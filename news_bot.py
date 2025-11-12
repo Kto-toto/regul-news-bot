@@ -4,8 +4,8 @@ import json
 import time
 import logging
 import hashlib
-from datetime import datetime, timezone
-import asyncio
+from datetime import datetime
+from urllib.parse import quote_plus
 
 import feedparser
 import requests
@@ -16,29 +16,29 @@ from sumy.nlp.tokenizers import Tokenizer
 from sumy.summarizers.lex_rank import LexRankSummarizer
 
 from telegram import Bot
-import pymorphy2
+import pymorphy3
 
-# ---------------- Настройки ----------------
+# -------------- Настройки (основные через environment / GitHub secrets) --------------
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 KEYWORDS = os.environ.get("KEYWORDS", "финансовая, платформа, банки").split(",")
-SOURCES_FILE = "sources.txt"
-PROCESSED_FILE = "processed.json"
+SOURCES_FILE = "sources.txt"  # optional: file with RSS/URLs
+PROCESSED_FILE = "processed.json"  # state file stored/коммитится в repo
 
+# default RSS sources (можно дополнить)
 DEFAULT_RSS = [
     "https://www.garant.ru/rss/news.rss",
     "https://www.interfax.ru/rss",
 ]
 
-# ------------------------------------------
+# --------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("news-watch")
 
 bot = Bot(token=TELEGRAM_TOKEN)
-morph = pymorphy2.MorphAnalyzer()
+morph = pymorphy3.MorphAnalyzer()
 
 
-# ---------------- Функции ----------------
 def load_sources():
     if os.path.exists(SOURCES_FILE):
         with open(SOURCES_FILE, "r", encoding="utf-8") as f:
@@ -103,17 +103,20 @@ def fetch_plain_article_text(url, max_chars=4000):
 
 
 def normalize_words(text):
-    """Приводим слова текста к нормальной форме."""
-    words = text.split()
-    return [morph.parse(w)[0].normal_form for w in words]
+    words = text.lower().split()
+    lemmas = set()
+    for word in words:
+        p = morph.parse(word)
+        if p:
+            lemmas.add(p[0].normal_form)
+    return lemmas
 
 
 def matches_keywords(text, keywords):
-    """Проверка наличия ключевого слова во всех падежах, числах и родах."""
-    text_norm = normalize_words(text.lower())
-    keywords_norm = [morph.parse(k.strip())[0].normal_form for k in keywords if k.strip()]
-    for kw in keywords_norm:
-        if kw in text_norm:
+    text_lemmas = normalize_words(text)
+    for kw in keywords:
+        kw_lemmas = normalize_words(kw)
+        if text_lemmas & kw_lemmas:
             return True
     return False
 
@@ -122,7 +125,7 @@ def make_message(item, summary):
     title = item.get("title", "").strip()
     link = item.get("link", "").strip()
     published = item.get("published", "")
-    published_str = published if published else datetime.now(timezone.utc).isoformat()
+    published_str = published if published else datetime.utcnow().isoformat()
     msg = f"📰 <b>{title}</b>\n\n"
     msg += f"📅 {published_str}\n"
     msg += f"🔗 {link}\n\n"
@@ -130,19 +133,6 @@ def make_message(item, summary):
     return msg
 
 
-async def send_message_async(message):
-    try:
-        await bot.send_message(
-            chat_id=TELEGRAM_CHAT_ID,
-            text=message,
-            parse_mode="HTML",
-            disable_web_page_preview=False
-        )
-    except Exception as ex:
-        logger.exception("Failed to send message: %s", ex)
-
-
-# ---------------- Основная функция ----------------
 def main():
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         logger.error("TELEGRAM_TOKEN or TELEGRAM_CHAT_ID not set.")
@@ -156,26 +146,12 @@ def main():
     state = load_state()
     processed = set(state.get("processed", []))
     new_processed = set()
+
     to_notify = []
 
     for src in sources:
         logger.info("Fetching: %s", src)
-        if src.startswith("http"):
-            entries = fetch_rss(src)
-            if not entries:
-                try:
-                    r = requests.get(src, timeout=12, headers={"User-Agent": "news-watch-bot/1.0"})
-                    soup = BeautifulSoup(r.text, "lxml")
-                    links = []
-                    for a in soup.find_all("a", href=True):
-                        href = a["href"]
-                        if href.startswith("http"):
-                            links.append({"title": a.get_text(strip=True), "link": href, "published": ""})
-                    entries = links[:30]
-                except Exception:
-                    entries = []
-        else:
-            entries = []
+        entries = fetch_rss(src) if src.startswith("http") else []
 
         for e in entries:
             title = e.get("title", "") or ""
@@ -193,33 +169,21 @@ def main():
             else:
                 article_text = fetch_plain_article_text(link)
 
-            if article_text:
-                try:
-                    summary = summarize_text(article_text, sentence_count=3)
-                except Exception:
-                    summary = ". ".join(article_text.split(".")[:3]) + "..."
-            else:
-                summary = (snippet[:300] + "...") if snippet else "Короткого текста нет."
+            summary = summarize_text(article_text, sentence_count=3) if article_text else (snippet[:300] + "...")
 
             msg = make_message(e, summary)
             to_notify.append((uid, msg))
             new_processed.add(uid)
             time.sleep(0.5)
 
-    # ---------------- Отправка сообщений через единый loop ----------------
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
+    # send notifications
     for uid, message in to_notify:
         try:
-            loop.run_until_complete(send_message_async(message))
+            bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode="HTML", disable_web_page_preview=False)
             logger.info("Sent: %s", uid)
             time.sleep(1)
         except Exception as ex:
             logger.exception("Failed to send message: %s", ex)
-
-    loop.close()
-    # ------------------------------------------------------
 
     combined = list(processed.union(new_processed))
     state["processed"] = combined[-2000:]
