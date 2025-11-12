@@ -1,0 +1,5 @@
+https://cbr.ru/rss/eventrss
+https://cbr.ru/rss/RssPress
+https://tass.ru/rss/v2.xml
+https://minfin.gov.ru/rss_news?mod=news&lim=50
+https://regulation.gov.ru/api/public/Rss/
