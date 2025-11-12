@@ -26,12 +26,10 @@ PROCESSED_FILE = "processed.json"  # state file stored/коммитится в r
 
 # default RSS sources (можно дополнить)
 DEFAULT_RSS = [
-    # Google News RSS по поиску (пример)
-    "https://news.google.com/rss/search?q=%22регулирование%22+OR+%22законопроект%22&hl=ru&gl=RU&ceid=RU:ru",
-    "https://news.google.com/rss/search?q=%22госдума%22&hl=ru&gl=RU&ceid=RU:ru",
     # правительственные и ведомственные RSS (пример)
     "https://www.garant.ru/rss/news.rss",
     # добавьте свои RSS здесь
+    "https://www.interfax.ru/rss",
 ]
 
 # --------------------------------------------------------------------
