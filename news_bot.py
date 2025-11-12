@@ -5,7 +5,7 @@ import time
 import logging
 import hashlib
 from datetime import datetime
-from urllib.parse import quote_plus
+import asyncio
 
 import feedparser
 import requests
@@ -15,33 +15,36 @@ from sumy.parsers.plaintext import PlaintextParser
 from sumy.nlp.tokenizers import Tokenizer
 from sumy.summarizers.lex_rank import LexRankSummarizer
 
-import nltk
-nltk.download("punkt")  # скачиваем токенизатор предложений
-
 from telegram import Bot
+from telegram.constants import ParseMode
 import pymorphy3
+import nltk
 
-# -------------- Настройки (основные через environment / GitHub secrets) --------------
+# ----------------- NLTK: скачиваем токенизаторы -----------------
+nltk.download("punkt")
+nltk.download("punkt_tab")
+
+# ----------------- Настройки -----------------
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 KEYWORDS = os.environ.get("KEYWORDS", "финансовая, платформа, банки").split(",")
-SOURCES_FILE = "sources.txt"  # optional: file with RSS/URLs
-PROCESSED_FILE = "processed.json"  # state file stored/коммитится в repo
+SOURCES_FILE = "sources.txt"
+PROCESSED_FILE = "processed.json"
 
-# default RSS sources (можно дополнить)
 DEFAULT_RSS = [
     "https://www.garant.ru/rss/news.rss",
     "https://www.interfax.ru/rss",
 ]
 
-# --------------------------------------------------------------------
+# ----------------- Логирование -----------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("news-watch")
 
+# ----------------- Инициализация -----------------
 bot = Bot(token=TELEGRAM_TOKEN)
 morph = pymorphy3.MorphAnalyzer()
 
-
+# ----------------- Функции -----------------
 def load_sources():
     if os.path.exists(SOURCES_FILE):
         with open(SOURCES_FILE, "r", encoding="utf-8") as f:
@@ -49,29 +52,24 @@ def load_sources():
             return lines + DEFAULT_RSS
     return DEFAULT_RSS
 
-
 def load_state():
     if os.path.exists(PROCESSED_FILE):
         with open(PROCESSED_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return {"processed": []}
 
-
 def save_state(state):
     with open(PROCESSED_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
-
 def md5_text(s: str):
     return hashlib.md5(s.encode("utf-8")).hexdigest()
-
 
 def summarize_text(text: str, sentence_count=3):
     parser = PlaintextParser.from_string(text, Tokenizer("russian"))
     summarizer = LexRankSummarizer()
     summary = summarizer(parser.document, sentence_count)
     return " ".join([str(s) for s in summary])
-
 
 def fetch_rss(url):
     try:
@@ -82,13 +80,11 @@ def fetch_rss(url):
             link = e.get("link", "")
             published = e.get("published", "") or e.get("updated", "")
             summary = e.get("summary", "")
-            content = summary
-            entries.append({"title": title, "link": link, "published": published, "summary": content})
+            entries.append({"title": title, "link": link, "published": published, "summary": summary})
         return entries
     except Exception as ex:
         logger.exception("RSS fetch failed for %s: %s", url, ex)
         return []
-
 
 def fetch_plain_article_text(url, max_chars=4000):
     try:
@@ -104,7 +100,6 @@ def fetch_plain_article_text(url, max_chars=4000):
         logger.exception("Article fetch failed %s", url)
         return ""
 
-
 def normalize_words(text):
     words = text.lower().split()
     lemmas = set()
@@ -114,7 +109,6 @@ def normalize_words(text):
             lemmas.add(p[0].normal_form)
     return lemmas
 
-
 def matches_keywords(text, keywords):
     text_lemmas = normalize_words(text)
     for kw in keywords:
@@ -122,7 +116,6 @@ def matches_keywords(text, keywords):
         if text_lemmas & kw_lemmas:
             return True
     return False
-
 
 def make_message(item, summary):
     title = item.get("title", "").strip()
@@ -135,8 +128,8 @@ def make_message(item, summary):
     msg += f"📄 <b>Кратко:</b>\n{summary}\n\n"
     return msg
 
-
-def main():
+# ----------------- Основная логика -----------------
+async def main():
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         logger.error("TELEGRAM_TOKEN or TELEGRAM_CHAT_ID not set.")
         return
@@ -177,14 +170,19 @@ def main():
             msg = make_message(e, summary)
             to_notify.append((uid, msg))
             new_processed.add(uid)
-            time.sleep(0.5)
+            await asyncio.sleep(0.5)
 
-    # send notifications
+    # ----------------- Отправка сообщений асинхронно -----------------
     for uid, message in to_notify:
         try:
-            bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode="HTML", disable_web_page_preview=False)
+            await bot.send_message(
+                chat_id=TELEGRAM_CHAT_ID,
+                text=message,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=False
+            )
             logger.info("Sent: %s", uid)
-            time.sleep(1)
+            await asyncio.sleep(1)
         except Exception as ex:
             logger.exception("Failed to send message: %s", ex)
 
@@ -195,4 +193,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
