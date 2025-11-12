@@ -15,6 +15,9 @@ from sumy.parsers.plaintext import PlaintextParser
 from sumy.nlp.tokenizers import Tokenizer
 from sumy.summarizers.lex_rank import LexRankSummarizer
 
+import nltk
+nltk.download("punkt")  # скачиваем токенизатор предложений
+
 from telegram import Bot
 import pymorphy3
 
