@@ -1,7 +1,8 @@
 feedparser==6.0.10
 requests==2.31.0
 beautifulsoup4==4.12.2
-lxml==5.3.0
 sumy==0.11.0
-python-telegram-bot==21.1.1
-pymorphy3==2.0.6
+lxml==5.3.0
+pymorphy3==2.0.3
+nltk==3.9.1
+aiogram==3.13.1
